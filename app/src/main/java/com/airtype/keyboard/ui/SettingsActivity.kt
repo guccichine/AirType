@@ -3,6 +3,7 @@ package com.airtype.keyboard.ui
 import android.os.Bundle
 import android.provider.Settings
 import android.view.inputmethod.InputMethodManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
@@ -21,7 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 class SettingsActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceed: Bundle?) {
+    override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
@@ -59,12 +60,12 @@ private fun SettingsScreen(
                     "2. Select AirType as the current input method\n" +
                     "3. Hold the S Pen side button and write letters in the air\n\n" +
                     "Gestures:\n" +
-                    "\u2022 Short stroke \u2192 letter\n" +
-                    "\u2022 Circle CW \u2192 undo\n" +
-                    "\u2022 Circle CCW \u2192 space\n" +
-                    "\u2022 Flick left \u2192 backspace\n" +
-                    "\u2022 Flick right \u2192 cursor right\n" +
-                    "\u2022 Double press \u2192 toggle shift",
+                    "• Short stroke → letter\n" +
+                    "• Circle CW → undo\n" +
+                    "• Circle CCW → space\n" +
+                    "• Flick left → backspace\n" +
+                    "• Flick right → cursor right\n" +
+                    "• Double press → toggle shift",
             fontSize = 15.sp
         )
         Spacer(modifier = Modifier.height(24.dp))
