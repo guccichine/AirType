@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:settingsActivity="com.airtype.keyboard.ui.SettingsActivity"
+    android:supportsSwitchingToNextInputMethod="true"
+    android:isDefault="false">
+
+    <subtype
+        android:label="@string/subtype_en_us"
+        android:imeSubtypeLocale="en_US"
+        android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="true"
+        android:subtypeId="1" />
+
+    <subtype
+        android:label="@string/subtype_en_uk"
+        android:imeSubtypeLocale="en_GB"
+        android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="true"
+        android:subtypeId="2" />
+
+</input-method>
