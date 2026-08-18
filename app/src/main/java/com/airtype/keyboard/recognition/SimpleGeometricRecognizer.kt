@@ -147,8 +147,8 @@ class SimpleGeometricRecognizer {
         if (f.cornerCount <= 1 && f.verticalDominance) return "i" to 0.50f
         if (f.cornerCount <= 1 && f.horizontalDominance) return null to 0f
 
-        Log.d(TAG, "No strong match (corners=${f.cornerCount} aspect=${\"%.2f\".format(f.aspect)} " +
-                "rot=${\"%.2f\".format(f.netRotation)} closed=${f.isClosed})")
+        Log.d(TAG, "No strong match (corners=${f.cornerCount} aspect=%.2f rot=%.2f closed=${f.isClosed})".format(f.aspect, f.netRotation))
+
         return null to 0f
     }
 }
