@@ -129,7 +129,10 @@ class AirTypeImeService : InputMethodService(),
     }
 
     private fun connectSpenRemote() {
-        if (SPenRemote.isConnected) return
+        if (SPenRemote.isConnected && isSpenConnected) {
+            Log.i(TAG, "Already connected")
+            return
+        }
         Log.i(TAG, "Connecting to S Pen Remote...")
         SPenRemote.connect(this, object : SPenRemote.ConnectionResultCallback {
             override fun onSuccess(manager: SPenUnitManager) {
@@ -147,7 +150,9 @@ class AirTypeImeService : InputMethodService(),
             }
             override fun onFailure(code: SPenRemote.ConnectionResultCallback.Error) {
                 isSpenConnected = false
-                Log.w(TAG, "S Pen connection failed: $code")
+                val detail = SPenRemote.lastErrorMessage.ifBlank { code.name }
+                Log.w(TAG, "S Pen connection failed: $code ($detail)")
+                lastRecognizedText = "SPen: $detail"
                 updateKeyboardStatus()
             }
         })

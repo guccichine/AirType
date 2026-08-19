@@ -12,17 +12,28 @@ import android.os.IBinder
 import android.util.Log
 import com.samsung.android.sdk.penremote.ISPenRemoteService
 
+/**
+ * Clean-room open reimplementation of Samsung S Pen Remote connect path.
+ * Hardened: soft feature checks, always report failures to the callback.
+ */
 object SPenRemote {
     const val VERSION_CODE = 16777217
-    const val VERSION_NAME = "1.0.1"
+    const val VERSION_NAME = "1.0.2"
 
+    private const val TAG = "SPenRemote"
     private const val SERVICE_CLASS_NAME =
         "com.samsung.android.service.aircommand.remotespen.external.RemoteSpenBindingService"
     private const val AIR_COMMAND_PACKAGE_NAME = "com.samsung.android.service.aircommand"
 
     private var stateChangeListener: ConnectionStateChangeListener? = null
 
+    @Volatile
     var isConnected: Boolean = false
+        private set
+
+    /** Last human-readable failure reason for UI. */
+    @Volatile
+    var lastErrorMessage: String = ""
         private set
 
     private var iSpenRemoteService: ISPenRemoteService? = null
@@ -30,22 +41,41 @@ object SPenRemote {
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(className: ComponentName?, service: IBinder?) {
-            Log.i("Spen", "Service connected")
+            Log.i(TAG, "Service connected: $className")
             if (service == null) {
+                isConnected = false
+                lastErrorMessage = "Binder null"
                 connectionResultCallback?.onFailure(ConnectionResultCallback.Error.CONNECTION_FAILED)
                 return
             }
             iSpenRemoteService = ISPenRemoteService.Stub.asInterface(service)
             SPenUnitManager.instance.remoteService = iSpenRemoteService
+            isConnected = true
+            lastErrorMessage = ""
             connectionResultCallback?.onSuccess(SPenUnitManager.instance)
             stateChangeListener?.onChange(ConnectionStateChangeListener.State.CONNECTED)
         }
 
         override fun onServiceDisconnected(className: ComponentName?) {
-            Log.i("Spen", "Service disconnected")
+            Log.i(TAG, "Service disconnected")
             iSpenRemoteService = null
             SPenUnitManager.instance.remoteService = null
             isConnected = false
+            lastErrorMessage = "Disconnected"
+            stateChangeListener?.onChange(ConnectionStateChangeListener.State.DISCONNECTED_BY_UNKNOWN_REASON)
+        }
+
+        override fun onNullBinding(name: ComponentName?) {
+            Log.e(TAG, "Null binding from $name")
+            isConnected = false
+            lastErrorMessage = "Null binding (service refused)"
+            connectionResultCallback?.onFailure(ConnectionResultCallback.Error.CONNECTION_FAILED)
+        }
+
+        override fun onBindingDied(name: ComponentName?) {
+            Log.e(TAG, "Binding died: $name")
+            isConnected = false
+            lastErrorMessage = "Binding died"
             stateChangeListener?.onChange(ConnectionStateChangeListener.State.DISCONNECTED_BY_UNKNOWN_REASON)
         }
     }
@@ -53,54 +83,64 @@ object SPenRemote {
     private var semFeatureList: List<String>? = null
 
     fun isFeatureEnabled(feature: Feature): Boolean {
-        if (semFeatureList != null) {
-            return semFeatureList!!.contains(feature.samsungFeatureName)
+        return try {
+            if (semFeatureList != null) {
+                return semFeatureList!!.any { it.contains(feature.samsungFeatureName, ignoreCase = true) }
+            }
+            val featureList = FloatingFeatureReflected().getString(SemFeatures.SPEN_FEATURE_LIST)
+            semFeatureList = featureList?.split(",")?.map { it.trim() } ?: listOf()
+            semFeatureList!!.any { it.contains(feature.samsungFeatureName, ignoreCase = true) }
+        } catch (e: Exception) {
+            Log.w(TAG, "Feature check failed, assuming available: ${e.message}")
+            true // don't block on reflection failures
         }
-        val featureList = FloatingFeatureReflected().getString(SemFeatures.SPEN_FEATURE_LIST)
-        semFeatureList = featureList?.split(",") ?: listOf()
-        return isFeatureEnabled(feature)
     }
 
     fun connect(context: Context, listener: ConnectionResultCallback) {
-        fun unsupported() {
-            Log.e("SPen", "Unsupported device")
+        connectionResultCallback = listener
+        lastErrorMessage = ""
+
+        Log.i(TAG, "connect() v$VERSION_NAME brand=${Build.BRAND} manuf=${Build.MANUFACTURER} model=${Build.MODEL}")
+
+        // Soft Samsung check
+        val isSamsung = Build.BRAND.equals("Samsung", true) ||
+                Build.MANUFACTURER.equals("Samsung", true)
+        if (!isSamsung) {
+            lastErrorMessage = "Not a Samsung device"
+            Log.e(TAG, lastErrorMessage)
             listener.onFailure(ConnectionResultCallback.Error.UNSUPPORTED_DEVICE)
-        }
-
-        Log.i("Spen", VERSION_NAME)
-
-        if (!(Build.BRAND.equals("Samsung", true) &&
-                    Build.MANUFACTURER.equals("Samsung", true))
-        ) {
-            unsupported()
             return
         }
 
+        // Air Command package must exist
         try {
             context.packageManager.getApplicationInfo(
                 AIR_COMMAND_PACKAGE_NAME,
                 PackageManager.GET_META_DATA
             )
         } catch (e: PackageManager.NameNotFoundException) {
-            unsupported()
+            lastErrorMessage = "Air Command app missing"
+            Log.e(TAG, lastErrorMessage)
+            listener.onFailure(ConnectionResultCallback.Error.UNSUPPORTED_DEVICE)
             return
         }
 
-        if (!FloatingFeatureReflected().getBoolean(SemFeatures.HAS_BLUETOOTH_LOW_ENERGY)) {
-            unsupported()
-            return
+        // Soft feature checks – log warnings but still try to bind
+        try {
+            val hasBle = FloatingFeatureReflected().getBoolean(SemFeatures.HAS_BLUETOOTH_LOW_ENERGY)
+            if (!hasBle) {
+                Log.w(TAG, "BLE S Pen feature flag false – still attempting bind")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "BLE feature reflection failed: ${e.message}")
         }
 
         if (!isFeatureEnabled(Feature.FEATURE_TYPE_BUTTON)) {
-            unsupported()
-            return
+            Log.w(TAG, "Button feature not listed – still attempting bind")
         }
-
-        connectionResultCallback = listener
 
         @SuppressLint("WrongConstant")
         val intent = Intent().apply {
-            flags = BIND_AUTO_CREATE
             setClassName(AIR_COMMAND_PACKAGE_NAME, SERVICE_CLASS_NAME)
             putExtra("binderType", 2)
             putExtra("clientVersion", VERSION_CODE)
@@ -108,22 +148,43 @@ object SPenRemote {
         }
 
         try {
-            context.bindService(intent, serviceConnection, BIND_AUTO_CREATE)
-            isConnected = true
+            val bound = context.bindService(intent, serviceConnection, BIND_AUTO_CREATE)
+            Log.i(TAG, "bindService returned $bound")
+            if (!bound) {
+                isConnected = false
+                lastErrorMessage = "bindService returned false"
+                listener.onFailure(ConnectionResultCallback.Error.CONNECTION_FAILED)
+            }
+            // isConnected set true only in onServiceConnected
         } catch (e: SecurityException) {
-            Log.e("Spen", "Permission com.samsung.android.sdk.penremote.BIND_SPEN_REMOTE is required")
+            isConnected = false
+            lastErrorMessage = "Missing BIND_SPEN_REMOTE permission"
+            Log.e(TAG, lastErrorMessage, e)
+            listener.onFailure(ConnectionResultCallback.Error.CONNECTION_FAILED)
+        } catch (e: Exception) {
+            isConnected = false
+            lastErrorMessage = "bind failed: ${e.message}"
+            Log.e(TAG, lastErrorMessage, e)
+            listener.onFailure(ConnectionResultCallback.Error.CONNECTION_FAILED)
         }
     }
 
-    fun setConnectionStateChangeListener(listener: ConnectionStateChangeListener) {
+    fun setConnectionStateChangeListener(listener: ConnectionStateChangeListener?) {
         this.stateChangeListener = listener
     }
 
     fun disconnect(context: Context) {
-        if (!isConnected) return
-        Log.i("Spen", "Service is disconnecting")
-        SPenUnitManager.instance.clearListeners()
-        context.unbindService(serviceConnection)
+        if (!isConnected && iSpenRemoteService == null) return
+        Log.i(TAG, "disconnect()")
+        try {
+            SPenUnitManager.instance.clearListeners()
+            context.unbindService(serviceConnection)
+        } catch (e: Exception) {
+            Log.w(TAG, "unbind: ${e.message}")
+        }
+        iSpenRemoteService = null
+        SPenUnitManager.instance.remoteService = null
+        isConnected = false
         stateChangeListener?.onChange(ConnectionStateChangeListener.State.DISCONNECTED)
     }
 
@@ -158,26 +219,38 @@ object SPenRemote {
 
     private class FloatingFeatureReflected {
         val className = "com.samsung.android.feature.SemFloatingFeature"
-        var clazz: Class<*>?
-        var instance: Any?
+        var clazz: Class<*>? = null
+        var instance: Any? = null
 
         init {
-            val classLoader = ClassLoader.getSystemClassLoader()
-            clazz = classLoader.loadClass(className)
-            instance = clazz?.getDeclaredMethod("getInstance")?.invoke(null, *arrayOf())
+            try {
+                val classLoader = ClassLoader.getSystemClassLoader()
+                clazz = classLoader.loadClass(className)
+                instance = clazz?.getDeclaredMethod("getInstance")?.invoke(null)
+            } catch (e: Exception) {
+                Log.w(TAG, "SemFloatingFeature unavailable: ${e.message}")
+            }
         }
 
         fun getString(feature: SemFeatures): String? {
-            return clazz?.getDeclaredMethod("getString", java.lang.String::class.java)
-                ?.invoke(instance, feature.feature) as String?
+            return try {
+                clazz?.getDeclaredMethod("getString", String::class.java)
+                    ?.invoke(instance, feature.feature) as String?
+            } catch (e: Exception) {
+                null
+            }
         }
 
         fun getBoolean(feature: SemFeatures): Boolean {
-            return clazz?.getDeclaredMethod(
-                "getBoolean",
-                java.lang.String::class.java,
-                Boolean::class.javaPrimitiveType
-            )?.invoke(instance, feature.feature, false) as Boolean? ?: false
+            return try {
+                clazz?.getDeclaredMethod(
+                    "getBoolean",
+                    String::class.java,
+                    Boolean::class.javaPrimitiveType
+                )?.invoke(instance, feature.feature, false) as Boolean? ?: false
+            } catch (e: Exception) {
+                false
+            }
         }
     }
 }
