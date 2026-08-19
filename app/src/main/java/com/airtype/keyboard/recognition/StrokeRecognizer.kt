@@ -30,7 +30,7 @@ enum class SpecialCommand {
  * Order:
  * 1. Gesture classification (flick / circle / letter)
  * 2. Map special gestures via user-configurable GesturePrefs
- * 3. Prefer ML Kit (with WritingArea + pre-context) when model is ready
+ * 3. Prefer ML Kit (normalized points + WritingArea + pre-context)
  * 4. Fall back to geometric recognizer
  */
 class StrokeRecognizer(context: Context) {
@@ -47,22 +47,22 @@ class StrokeRecognizer(context: Context) {
     val isMlKitReady: Boolean
         get() = mlKit.isReady
 
-    /**
-     * @param preContext text already present before the cursor (helps ML Kit)
-     */
     fun recognize(
         rawPoints: List<Pair<Float, Float>>,
         isUppercase: Boolean = false,
         preContext: String = ""
     ): RecognitionResult {
-        if (rawPoints.size < 3) return RecognitionResult.None
+        if (rawPoints.size < 3) {
+            Log.d(TAG, "Too few raw points: ${rawPoints.size}")
+            return RecognitionResult.None
+        }
 
         // 1. High-level gesture classification
         val analysis = GestureClassifier.analyze(rawPoints)
         Log.d(TAG, "Gesture: ${analysis.type} conf=${analysis.confidence} " +
-                "len=${analysis.pathLength} size=${analysis.boundingSize}")
+                "len=${analysis.pathLength} size=${analysis.boundingSize} closed=${analysis.isClosed}")
 
-        // 2. Special commands (user-configurable)
+        // 2. Special commands (only for clear flicks / circles)
         when (analysis.type) {
             GestureType.FLICK_LEFT,
             GestureType.FLICK_RIGHT,
@@ -72,22 +72,25 @@ class StrokeRecognizer(context: Context) {
                 Log.i(TAG, "Mapped ${analysis.type} → $action")
                 return RecognitionResult.Command(action)
             }
-            GestureType.UNKNOWN -> return RecognitionResult.None
+            GestureType.UNKNOWN -> {
+                Log.d(TAG, "Gesture UNKNOWN – abort")
+                return RecognitionResult.None
+            }
             else -> { /* letter path */ }
         }
 
-        // 3. Preprocess
+        // 3. Preprocess (normalize to unit box) – used by BOTH recognizers
         val processed = PathPreprocessor.process(rawPoints)
         if (processed.size < 4) {
-            Log.d(TAG, "Path too short after preprocessing")
+            Log.d(TAG, "Path too short after preprocessing (${processed.size})")
             return RecognitionResult.None
         }
 
-        // 4. Prefer ML Kit when the model is available
+        // 4. Prefer ML Kit when ready – MUST use normalized points
         if (mlKit.isReady) {
             val mlText = runBlocking {
                 withTimeoutOrNull(ML_KIT_TIMEOUT_MS) {
-                    mlKit.recognize(rawPoints, preContext)
+                    mlKit.recognize(processed, preContext)
                 }
             }
             if (!mlText.isNullOrBlank()) {
@@ -95,12 +98,12 @@ class StrokeRecognizer(context: Context) {
                 Log.i(TAG, "ML Kit → \"$text\"")
                 return RecognitionResult.Text(text)
             }
-            Log.d(TAG, "ML Kit returned empty – falling back to geometric")
+            Log.d(TAG, "ML Kit empty – falling back to geometric")
         } else {
-            Log.d(TAG, "ML Kit model not ready yet – using geometric only")
+            Log.d(TAG, "ML Kit not ready – geometric only")
         }
 
-        // 5. Geometric fallback
+        // 5. Geometric fallback (always offline)
         val geometricLetter = geometric.recognize(processed)
         if (geometricLetter != null) {
             val text = if (isUppercase) geometricLetter.uppercase() else geometricLetter.lowercase()
@@ -108,6 +111,7 @@ class StrokeRecognizer(context: Context) {
             return RecognitionResult.Text(text)
         }
 
+        Log.d(TAG, "No recognition result")
         return RecognitionResult.None
     }
 

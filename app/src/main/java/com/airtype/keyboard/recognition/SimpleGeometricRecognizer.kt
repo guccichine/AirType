@@ -19,7 +19,7 @@ class SimpleGeometricRecognizer {
 
     companion object {
         private const val TAG = "GeoRecognizer"
-        private const val MIN_CONFIDENCE = 0.52f
+        private const val MIN_CONFIDENCE = 0.48f
     }
 
     fun recognize(normalizedPoints: List<Pair<Float, Float>>): String? {

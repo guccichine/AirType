@@ -247,8 +247,16 @@ class AirTypeImeService : InputMethodService(),
                 }
                 updateKeyboardStatus()
             }
-            is RecognitionResult.Command -> executeCommand(result.command)
-            RecognitionResult.None -> { }
+            is RecognitionResult.Command -> {
+                executeCommand(result.command)
+                lastRecognizedText = result.command.name.lowercase()
+                updateKeyboardStatus()
+            }
+            RecognitionResult.None -> {
+                lastRecognizedText = "?"
+                updateKeyboardStatus()
+                android.util.Log.w("AirTypeIME", "Recognition returned None (${points.size} pts)")
+            }
         }
     }
 

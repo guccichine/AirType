@@ -13,11 +13,11 @@ object GestureClassifier {
 
     private const val SHORT_SIZE_THRESHOLD = 0.35f
     private const val LONG_SIZE_THRESHOLD = 0.90f
-    private const val FLICK_ASPECT_RATIO = 3.0f
+    private const val FLICK_ASPECT_RATIO = 3.5f
     private const val FLICK_MAX_DEVIATION = 0.25f
-    private const val CIRCLE_CLOSURE_RATIO = 0.22f
-    private const val CIRCLE_MIN_TURNS = 0.65f
-    private const val MIN_POINTS_FOR_CIRCLE = 12
+    private const val CIRCLE_CLOSURE_RATIO = 0.18f
+    private const val CIRCLE_MIN_TURNS = 0.85f
+    private const val MIN_POINTS_FOR_CIRCLE = 18
 
     fun analyze(rawPoints: List<Pair<Float, Float>>): GestureAnalysis {
         if (rawPoints.size < 3) {

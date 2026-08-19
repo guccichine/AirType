@@ -16,7 +16,7 @@ import kotlin.math.sqrt
  */
 object PathPreprocessor {
 
-    private const val MIN_DISTANCE = 0.008f
+    private const val MIN_DISTANCE = 0.002f
     private const val SMOOTH_WINDOW = 3
     private const val TARGET_POINT_COUNT = 64
 
