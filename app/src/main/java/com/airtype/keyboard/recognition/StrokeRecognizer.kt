@@ -31,14 +31,14 @@ enum class SpecialCommand {
  * 1. High-level gesture classification (flick / circle / short / long)
  * 2. Map special gestures to commands
  * 3. Preprocess path
- * 4. Geometric classifier (instant, fully offline)
- * 5. If geometric fails and ML Kit model is ready → ML Kit Digital Ink
+ * 4. If ML Kit model is ready → prefer ML Kit (much higher accuracy)
+ * 5. Otherwise fall back to geometric classifier (instant, fully offline)
  */
 class StrokeRecognizer(context: Context) {
 
     companion object {
         private const val TAG = "StrokeRecognizer"
-        private const val ML_KIT_TIMEOUT_MS = 800L
+        private const val ML_KIT_TIMEOUT_MS = 900L
     }
 
     private val geometric = SimpleGeometricRecognizer()
@@ -75,15 +75,7 @@ class StrokeRecognizer(context: Context) {
             return RecognitionResult.None
         }
 
-        // 4. Geometric (always available offline)
-        val geometricLetter = geometric.recognize(processed)
-        if (geometricLetter != null) {
-            val text = if (isUppercase) geometricLetter.uppercase() else geometricLetter.lowercase()
-            Log.i(TAG, "Geometric → \"$text\"")
-            return RecognitionResult.Text(text)
-        }
-
-        // 5. ML Kit fallback (if model downloaded)
+        // 4. Prefer ML Kit when the model is available (far more accurate for letters)
         if (mlKit.isReady) {
             val mlText = runBlocking {
                 withTimeoutOrNull(ML_KIT_TIMEOUT_MS) {
@@ -95,8 +87,17 @@ class StrokeRecognizer(context: Context) {
                 Log.i(TAG, "ML Kit → \"$text\"")
                 return RecognitionResult.Text(text)
             }
+            Log.d(TAG, "ML Kit returned empty – falling back to geometric")
         } else {
-            Log.d(TAG, "ML Kit model not ready yet – geometric only")
+            Log.d(TAG, "ML Kit model not ready yet – using geometric only")
+        }
+
+        // 5. Geometric fallback (always available offline)
+        val geometricLetter = geometric.recognize(processed)
+        if (geometricLetter != null) {
+            val text = if (isUppercase) geometricLetter.uppercase() else geometricLetter.lowercase()
+            Log.i(TAG, "Geometric → \"$text\"")
+            return RecognitionResult.Text(text)
         }
 
         return RecognitionResult.None
