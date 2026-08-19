@@ -5,9 +5,6 @@ import android.util.Log
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 
-/**
- * Result returned by any stroke recognizer.
- */
 sealed class RecognitionResult {
     data class Text(val text: String) : RecognitionResult()
     data class Command(val command: SpecialCommand) : RecognitionResult()
@@ -25,19 +22,18 @@ enum class SpecialCommand {
 }
 
 /**
- * Main offline stroke recognition entry point.
- *
- * Order:
- * 1. Gesture classification (flick / circle / letter)
- * 2. Map special gestures via user-configurable GesturePrefs
- * 3. Prefer ML Kit (normalized points + WritingArea + pre-context)
- * 4. Fall back to geometric recognizer
+ * Restored reliable recognition path (matches early working behaviour):
+ * 1. Classify gesture
+ * 2. Only fire special commands for HIGH-confidence flicks/circles
+ * 3. Geometric first (always works offline, like v1)
+ * 4. ML Kit only if geometric fails and model is ready
  */
 class StrokeRecognizer(context: Context) {
 
     companion object {
         private const val TAG = "StrokeRecognizer"
-        private const val ML_KIT_TIMEOUT_MS = 900L
+        private const val ML_KIT_TIMEOUT_MS = 700L
+        private const val SPECIAL_GESTURE_MIN_CONF = 0.78f
     }
 
     private val geometric = SimpleGeometricRecognizer()
@@ -53,65 +49,61 @@ class StrokeRecognizer(context: Context) {
         preContext: String = ""
     ): RecognitionResult {
         if (rawPoints.size < 3) {
-            Log.d(TAG, "Too few raw points: ${rawPoints.size}")
+            Log.d(TAG, "Too few points: ${rawPoints.size}")
             return RecognitionResult.None
         }
 
-        // 1. High-level gesture classification
         val analysis = GestureClassifier.analyze(rawPoints)
-        Log.d(TAG, "Gesture: ${analysis.type} conf=${analysis.confidence} " +
-                "len=${analysis.pathLength} size=${analysis.boundingSize} closed=${analysis.isClosed}")
+        Log.d(TAG, "Gesture=${analysis.type} conf=${analysis.confidence} " +
+                "len=${analysis.pathLength} size=${analysis.boundingSize}")
 
-        // 2. Special commands (only for clear flicks / circles)
-        when (analysis.type) {
-            GestureType.FLICK_LEFT,
-            GestureType.FLICK_RIGHT,
-            GestureType.CIRCLE_CW,
-            GestureType.CIRCLE_CCW -> {
-                val action = gesturePrefs.getAction(analysis.type)
-                Log.i(TAG, "Mapped ${analysis.type} → $action")
-                return RecognitionResult.Command(action)
-            }
-            GestureType.UNKNOWN -> {
-                Log.d(TAG, "Gesture UNKNOWN – abort")
-                return RecognitionResult.None
-            }
-            else -> { /* letter path */ }
+        // Special commands only when classifier is confident
+        val isSpecial = analysis.type == GestureType.FLICK_LEFT ||
+                analysis.type == GestureType.FLICK_RIGHT ||
+                analysis.type == GestureType.CIRCLE_CW ||
+                analysis.type == GestureType.CIRCLE_CCW
+
+        if (isSpecial && analysis.confidence >= SPECIAL_GESTURE_MIN_CONF) {
+            val action = gesturePrefs.getAction(analysis.type)
+            Log.i(TAG, "Special ${analysis.type} → $action")
+            return RecognitionResult.Command(action)
         }
 
-        // 3. Preprocess (normalize to unit box) – used by BOTH recognizers
+        // Preprocess for letter recognition
         val processed = PathPreprocessor.process(rawPoints)
+        Log.d(TAG, "Processed points: ${processed.size} (raw=${rawPoints.size})")
         if (processed.size < 4) {
-            Log.d(TAG, "Path too short after preprocessing (${processed.size})")
+            Log.w(TAG, "Too few points after preprocess")
             return RecognitionResult.None
         }
 
-        // 4. Prefer ML Kit when ready – MUST use normalized points
-        if (mlKit.isReady) {
-            val mlText = runBlocking {
-                withTimeoutOrNull(ML_KIT_TIMEOUT_MS) {
-                    mlKit.recognize(processed, preContext)
-                }
-            }
-            if (!mlText.isNullOrBlank()) {
-                val text = if (isUppercase) mlText.uppercase() else mlText.lowercase()
-                Log.i(TAG, "ML Kit → \"$text\"")
-                return RecognitionResult.Text(text)
-            }
-            Log.d(TAG, "ML Kit empty – falling back to geometric")
-        } else {
-            Log.d(TAG, "ML Kit not ready – geometric only")
-        }
-
-        // 5. Geometric fallback (always offline)
-        val geometricLetter = geometric.recognize(processed)
-        if (geometricLetter != null) {
-            val text = if (isUppercase) geometricLetter.uppercase() else geometricLetter.lowercase()
+        // 1) Geometric FIRST – this is what worked in v1
+        val geoLetter = geometric.recognize(processed)
+        if (geoLetter != null) {
+            val text = if (isUppercase) geoLetter.uppercase() else geoLetter.lowercase()
             Log.i(TAG, "Geometric → \"$text\"")
             return RecognitionResult.Text(text)
         }
 
-        Log.d(TAG, "No recognition result")
+        // 2) ML Kit only as fallback when geometric has no match
+        if (mlKit.isReady) {
+            try {
+                val mlText = runBlocking {
+                    withTimeoutOrNull(ML_KIT_TIMEOUT_MS) {
+                        mlKit.recognize(processed, preContext)
+                    }
+                }
+                if (!mlText.isNullOrBlank()) {
+                    val text = if (isUppercase) mlText.uppercase() else mlText.lowercase()
+                    Log.i(TAG, "ML Kit → \"$text\"")
+                    return RecognitionResult.Text(text)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "ML Kit error", e)
+            }
+        }
+
+        Log.w(TAG, "No match from geometric or ML Kit")
         return RecognitionResult.None
     }
 
