@@ -86,10 +86,14 @@ private fun SettingsScreen(
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Fully offline S Pen air-writing keyboard.\n\n" +
-                    "1. Enable AirType in system keyboard settings\n" +
-                    "2. Select AirType as the current input method\n" +
-                    "3. Hold the S Pen side button and write in the air",
+            text = "Setup (accessibility is NOT required):\n\n" +
+                    "1. Tap Enable AirType Keyboard → turn AirType ON\n" +
+                    "2. Tap Select Input Method → choose AirType\n" +
+                    "3. Open any text field so the keyboard appears\n" +
+                    "4. Check status bar: S Pen ● = connected\n" +
+                    "5. Hold S Pen side button, write a letter, release\n\n" +
+                    "On-screen keys should type even without S Pen.\n" +
+                    "If on-screen keys do nothing, AirType is not selected.",
             fontSize = 14.sp
         )
 
