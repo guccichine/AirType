@@ -80,7 +80,7 @@ fun AirTypeKeyboard(
             Spacer(modifier = Modifier.width(4.dp))
             KeyRow(listOf("z", "x", "c", "v", "b", "n", "m"), isUppercase, onKey)
             Spacer(modifier = Modifier.width(4.dp))
-            KeyButton("\u232B", width = 48.dp, onClick = onBackspace)
+            KeyButton("⌫", width = 56.dp, onClick = onBackspace)
         }
         Row(
             modifier = Modifier

@@ -233,7 +233,11 @@ class AirTypeImeService : InputMethodService(),
         currentStroke.clear()
         absolutePath.clear()
         if (points.size < 3) return
-        val result = strokeRecognizer.recognize(points, isUppercase)
+        // Pre-context helps ML Kit disambiguate letters (n/u, etc.)
+        val preContext = try {
+            currentInputConnection?.getTextBeforeCursor(20, 0)?.toString() ?: ""
+        } catch (_: Exception) { "" }
+        val result = strokeRecognizer.recognize(points, isUppercase, preContext)
         when (result) {
             is RecognitionResult.Text -> {
                 commitText(result.text)

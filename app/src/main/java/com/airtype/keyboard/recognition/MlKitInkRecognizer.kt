@@ -11,18 +11,27 @@ import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognitionModel
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizer
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizerOptions
 import com.google.mlkit.vision.digitalink.recognition.Ink
+import com.google.mlkit.vision.digitalink.recognition.RecognitionContext
+import com.google.mlkit.vision.digitalink.recognition.WritingArea
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 /**
  * Offline-capable ML Kit Digital Ink Recognition wrapper.
+ *
+ * Improvements over the first version:
+ * - WritingArea is supplied so the model understands relative letter size
+ * - Optional pre-context (previous text) for better disambiguation
  */
 class MlKitInkRecognizer(private val context: Context) {
 
     companion object {
         private const val TAG = "MlKitInk"
         private const val LANGUAGE_TAG = "en-US"
+        // Normalized writing area used for single-letter air strokes
+        private const val WRITE_AREA_WIDTH = 1.2f
+        private const val WRITE_AREA_HEIGHT = 1.4f
     }
 
     private var recognizer: DigitalInkRecognizer? = null
@@ -80,18 +89,39 @@ class MlKitInkRecognizer(private val context: Context) {
     val isReady: Boolean
         get() = modelReady.get() && recognizer != null
 
-    suspend fun recognize(points: List<Pair<Float, Float>>): String? {
+    /**
+     * @param points normalized stroke points (roughly -0.5..0.5 range after PathPreprocessor)
+     * @param preContext up to 20 characters of text that already appear before the cursor
+     */
+    suspend fun recognize(
+        points: List<Pair<Float, Float>>,
+        preContext: String = ""
+    ): String? {
         if (!isReady || points.size < 4) return null
         val rec = recognizer ?: return null
 
         val ink = buildInk(points) ?: return null
 
+        val contextBuilder = RecognitionContext.builder()
+            .setWritingArea(WritingArea(WRITE_AREA_WIDTH, WRITE_AREA_HEIGHT))
+        if (preContext.isNotBlank()) {
+            // ML Kit only uses the last 20 characters
+            contextBuilder.setPreContext(preContext.takeLast(20))
+        }
+        val recognitionContext = contextBuilder.build()
+
         return suspendCoroutine { cont ->
-            rec.recognize(ink)
+            rec.recognize(ink, recognitionContext)
                 .addOnSuccessListener { result ->
-                    val text = result.candidates.firstOrNull()?.text
-                    Log.i(TAG, "ML Kit result: \"$text\"")
-                    cont.resume(text)
+                    val candidates = result.candidates
+                    val top = candidates.firstOrNull()?.text
+                    Log.i(TAG, "ML Kit top: \"$top\" (candidates=${candidates.map { it.text }})")
+                    // Prefer a single character when the user is writing letter-by-letter
+                    val best = candidates
+                        .map { it.text.trim() }
+                        .firstOrNull { it.length == 1 && it[0].isLetterOrDigit() }
+                        ?: top?.trim()
+                    cont.resume(best)
                 }
                 .addOnFailureListener { e ->
                     Log.e(TAG, "ML Kit recognition failed", e)
@@ -103,15 +133,17 @@ class MlKitInkRecognizer(private val context: Context) {
     private fun buildInk(points: List<Pair<Float, Float>>): Ink? {
         if (points.isEmpty()) return null
 
-        val scale = 400f
-        val offsetX = 200f
-        val offsetY = 200f
+        // Map normalized points into the WritingArea coordinate space
+        val scaleX = WRITE_AREA_WIDTH * 0.85f
+        val scaleY = WRITE_AREA_HEIGHT * 0.85f
+        val offsetX = WRITE_AREA_WIDTH / 2f
+        val offsetY = WRITE_AREA_HEIGHT / 2f
         val now = System.currentTimeMillis()
 
         val strokeBuilder = Ink.Stroke.builder()
         points.forEachIndexed { index, (x, y) ->
-            val px = x * scale + offsetX
-            val py = -y * scale + offsetY
+            val px = x * scaleX + offsetX
+            val py = -y * scaleY + offsetY   // flip Y so up is negative in model space if needed
             val t = now + index * 16L
             strokeBuilder.addPoint(Ink.Point.create(px, py, t))
         }

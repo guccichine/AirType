@@ -27,12 +27,11 @@ enum class SpecialCommand {
 /**
  * Main offline stroke recognition entry point.
  *
- * Order of operations:
- * 1. High-level gesture classification (flick / circle / short / long)
- * 2. Map special gestures to commands
- * 3. Preprocess path
- * 4. If ML Kit model is ready → prefer ML Kit (much higher accuracy)
- * 5. Otherwise fall back to geometric classifier (instant, fully offline)
+ * Order:
+ * 1. Gesture classification (flick / circle / letter)
+ * 2. Map special gestures via user-configurable GesturePrefs
+ * 3. Prefer ML Kit (with WritingArea + pre-context) when model is ready
+ * 4. Fall back to geometric recognizer
  */
 class StrokeRecognizer(context: Context) {
 
@@ -43,13 +42,18 @@ class StrokeRecognizer(context: Context) {
 
     private val geometric = SimpleGeometricRecognizer()
     private val mlKit = MlKitInkRecognizer(context.applicationContext)
+    private val gesturePrefs = GesturePrefs(context.applicationContext)
 
     val isMlKitReady: Boolean
         get() = mlKit.isReady
 
+    /**
+     * @param preContext text already present before the cursor (helps ML Kit)
+     */
     fun recognize(
         rawPoints: List<Pair<Float, Float>>,
-        isUppercase: Boolean = false
+        isUppercase: Boolean = false,
+        preContext: String = ""
     ): RecognitionResult {
         if (rawPoints.size < 3) return RecognitionResult.None
 
@@ -58,12 +62,16 @@ class StrokeRecognizer(context: Context) {
         Log.d(TAG, "Gesture: ${analysis.type} conf=${analysis.confidence} " +
                 "len=${analysis.pathLength} size=${analysis.boundingSize}")
 
-        // 2. Special commands
+        // 2. Special commands (user-configurable)
         when (analysis.type) {
-            GestureType.FLICK_LEFT -> return RecognitionResult.Command(SpecialCommand.BACKSPACE)
-            GestureType.FLICK_RIGHT -> return RecognitionResult.Command(SpecialCommand.CURSOR_RIGHT)
-            GestureType.CIRCLE_CW -> return RecognitionResult.Command(SpecialCommand.UNDO)
-            GestureType.CIRCLE_CCW -> return RecognitionResult.Command(SpecialCommand.SPACE)
+            GestureType.FLICK_LEFT,
+            GestureType.FLICK_RIGHT,
+            GestureType.CIRCLE_CW,
+            GestureType.CIRCLE_CCW -> {
+                val action = gesturePrefs.getAction(analysis.type)
+                Log.i(TAG, "Mapped ${analysis.type} → $action")
+                return RecognitionResult.Command(action)
+            }
             GestureType.UNKNOWN -> return RecognitionResult.None
             else -> { /* letter path */ }
         }
@@ -75,11 +83,11 @@ class StrokeRecognizer(context: Context) {
             return RecognitionResult.None
         }
 
-        // 4. Prefer ML Kit when the model is available (far more accurate for letters)
+        // 4. Prefer ML Kit when the model is available
         if (mlKit.isReady) {
             val mlText = runBlocking {
                 withTimeoutOrNull(ML_KIT_TIMEOUT_MS) {
-                    mlKit.recognize(rawPoints)
+                    mlKit.recognize(rawPoints, preContext)
                 }
             }
             if (!mlText.isNullOrBlank()) {
@@ -92,7 +100,7 @@ class StrokeRecognizer(context: Context) {
             Log.d(TAG, "ML Kit model not ready yet – using geometric only")
         }
 
-        // 5. Geometric fallback (always available offline)
+        // 5. Geometric fallback
         val geometricLetter = geometric.recognize(processed)
         if (geometricLetter != null) {
             val text = if (isUppercase) geometricLetter.uppercase() else geometricLetter.lowercase()
