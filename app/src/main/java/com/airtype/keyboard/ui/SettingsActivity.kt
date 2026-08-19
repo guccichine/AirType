@@ -116,7 +116,7 @@ private fun SettingsScreen(
         Spacer(modifier = Modifier.height(12.dp))
 
         // Re-read prefs each time version changes
-        val _ = version
+        val forceRecompose = version
         gesturePrefs.configurableGestures().forEach { gesture ->
             GestureRow(
                 label = gesturePrefs.labelFor(gesture),
