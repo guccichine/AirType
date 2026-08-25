@@ -7,6 +7,10 @@ on:
     branches: [ main, master ]
   release:
     types: [ published ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 # Cancel outdated runs on the same branch/PR
 concurrency:
@@ -86,3 +90,27 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Stage named APKs
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/*.apk dist/AirType-v1.0.4-debug.apk
+          ls -lh dist
+
+      - name: Publish GitHub Release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.4
+          name: AirType v1.0.4 – S Pen bind harden
+          files: dist/AirType-v1.0.4-debug.apk
+          fail_on_unmatched_files: true
+          body: |
+            Latest main build.
+
+            - Soft-fail S Pen feature reflection
+            - Surface bind failures in the status bar
+            - Only mark connected after onServiceConnected
+
+            Install **AirType-v1.0.4-debug.apk** over the previous debug build.
